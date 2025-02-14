@@ -776,7 +776,7 @@ export class CacheOperation {
 			// Get the line
 			.map((idx) => lines[idx])
 			// Create a Task from the line
-			.map((line: string) => this.plugin.taskParser.getTickTickIdFromLineText(line))
+			.map((line: string) => this.plugin.taskParser.getTickTickId(line))
 			// Filter out the nulls
 			.filter((taskId: string | null) => taskId !== null)
 		;

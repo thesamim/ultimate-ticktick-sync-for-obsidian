@@ -1,0 +1,12 @@
+
+	getTaskHash(task: ITask) {
+		console.time("Object Hash")
+		const crypto = require('crypto');
+		// Only using fields user can change. Make sure this catches everything.
+		const serializedObject = `${task.title}${task.items}${task.dueDate}${task.startDate}` +
+										`${task.status}${task.content}${task.childIds}` +
+										`${task.priority}${task.parentId}`;
+		const hash = crypto.createHash('sha256').update(serializedObject).digest('hex');
+		console.timeEnd("Object Hash")
+		return hash;
+	}

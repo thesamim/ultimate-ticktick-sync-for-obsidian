@@ -3,6 +3,7 @@ import type TickTickSync from '@/main';
 import type {ITask} from '@/api/types/Task';
 import {getSettings} from "@/settings";
 import {sha256} from 'crypto-hash';
+import { log } from '@/utils/logging';
 
 interface dataviewTaskObject {
 	status: string;
@@ -105,7 +106,7 @@ const checkboxRegex = /\[(.)\]/u;
 
 // Matches the rest of the task after the checkbox.
 const afterCheckboxRegex = / *(.*)/u;
-
+const taskIDRegex = / %%(.*)%%/u;
 const taskRegex = new RegExp(
 	indentationRegex.source +
 	listMarkerRegex.source +
@@ -149,7 +150,7 @@ export const REGEX = {
 	BLANK_LINE: /^\s*$/,
 	TickTick_EVENT_DATE: /(\d{4})-(\d{2})-(\d{2})/,
 	ITEM_LINE: /\[(.*?)\]\s*(.*?)\s*%%(.*?)%%/,
-	REMOVE_ITEM_ID: /\s%%[^\[](.*?)[^\]]%%/g
+	LINE_ITEM_ID: /%%(?!\[ticktick_id::\s)[a-f0-9]{24}%%/g
 };
 
 export class TaskParser {
@@ -163,7 +164,7 @@ export class TaskParser {
 	}
 
 	//convert a task object to a task line.
-	async convertTaskToLine(task: ITask, direction: string): Promise<string> {
+	async convertTaskToLine(task: ITask, numTabs: number, direction: string): Promise<string> {
 		let resultLine = '';
 
 		task.title = this.stripOBSUrl(task.title);
@@ -188,11 +189,16 @@ export class TaskParser {
 		resultLine = this.plugin.dateMan?.addDatesToLine(resultLine, task, direction);
 
 
-		if (task.items && task.items.length > 0) {
-			resultLine = this.addItems(resultLine, task.items);
+		const nNoteLines = this.getNoteLines(task);
+		if (nNoteLines == 0 && task.items && task.items.length > 0) {
+			resultLine = this.addItems(resultLine, task.items, numTabs);
+		} else {
+			if (nNoteLines > 0) {
+				resultLine = this.addNote(resultLine, task.content);
+			}
 		}
+		console.log("resultLine:", resultLine);
 		return resultLine;
-
 	}
 
 	stripOBSUrl(title: string): string {
@@ -233,7 +239,7 @@ export class TaskParser {
 	}
 
 	stripLineItemId(lineText: string) {
-		let line = lineText.replace(REGEX.REMOVE_ITEM_ID, '')
+		let line = lineText.replace(REGEX.LINE_ITEM_ID, '')
 		return line;
 	}
 
@@ -262,7 +268,7 @@ export class TaskParser {
 		const lineTextTabIndentation = this.getTabIndentation(lineText);
 		let textWithoutIndentation = this.removeTaskIndentation(lineText);
 
-		const TickTick_id = this.getTickTickIdFromLineText(textWithoutIndentation);
+		const TickTick_id = this.getTickTickId(textWithoutIndentation);
 
 		//Strip dates.
 		// console.log("sending: ", textWithoutIndentation, this.plugin.dateMan);
@@ -287,7 +293,7 @@ export class TaskParser {
 				if ((this.getTabIndentation(line) < lineTextTabIndentation)) {
 					//console.log(`Indentation is ${this.getTabIndentation(line)}`)
 					if (this.hasTickTickId(line)) {
-						parentId = this.getTickTickIdFromLineText(line);
+						parentId = this.getTickTickId(line);
 						hasParent = true;
 						// console.log(`parent id is ${parentId}`)
 						parentTaskObject = await this.plugin.cacheOperation?.loadTaskFromCacheID(parentId);
@@ -425,6 +431,20 @@ export class TaskParser {
 		}
 		return (result);
 	}
+	getLineItemId(text: string) {
+		// console.log("Text:[", text, "]\n", REGEX.LINE_ITEM_ID.test(text));
+		let res = text.match(REGEX.LINE_ITEM_ID)
+		let lineItemId;
+		if (res) {
+			lineItemId = res[0].slice(2, -2)
+			// console.log("\nResult: ", res);
+		}
+		return lineItemId;
+	}
+
+	isTickTickTask(text: string) {
+		return this.hasTickTickId(text);
+	}
 
 	addTickTickId(line: string, ticktick_id: string) {
 		line = `${line} %%[ticktick_id:: ${ticktick_id}]%%`;
@@ -445,7 +465,7 @@ export class TaskParser {
 		return result ? result[1] : null;
 	}
 
-	getTickTickIdFromLineText(text: string) {
+	getTickTickId(text: string) {
         let result = REGEX.TickTick_ID_NUM.exec(text);
 		if (!result) {
 			//try the dataview version
@@ -647,6 +667,7 @@ export class TaskParser {
 		return mapping ? mapping.ticktick : null;
 	}
 
+	//Returns the Item WITHOUT task ID
 	taskFromLine(line: string)  {
 		let matches = taskRegex.exec(line);
 		if (!matches) {
@@ -660,6 +681,7 @@ export class TaskParser {
 		const status = checkBox == 'x';
 		// console.log("TRACETHIS taskFromLine: ", line, "STATUS [", status, "]");
 		let description = matches[4] || "";
+		description = description.replace(taskIDRegex, "");
 		let indent = matches[1] ? matches[1].length : 0;
 
 		return {
@@ -688,24 +710,36 @@ export class TaskParser {
 		}
 	}
 
-	private addItems(resultLine: string, items: any[]): string {
+	private addItems(resultLine: string, items: any[], numTabs: number ): string {
 		//TODO count indentations?
 		items.forEach(item => {
 			let completion = item.status > 0 ? '- [x]' : '- [ ]';
-			// When Full Vault Sync is enabled, we can tell the difference between items and subtasks
+			// When Full Vault Sync is enabled, we can't tell the difference between items and subtasks
 			// everything is a subtask
 			// TODO: in the fullness of time, see if there's a way to differentiate.
+			const tabs = '\t'.repeat(numTabs + 1);
+			resultLine = `${resultLine} \n${tabs}${completion} ${item.title} `
 			if (!getSettings().enableFullVaultSync) {
-				resultLine = `${resultLine} \n${completion} ${item.title} %%${item.id}%%`;
-			} else {
-				resultLine = `${resultLine} \n${completion} ${item.title}`;
+				resultLine = `${resultLine} %%${item.id}%%`;
 			}
 		});
+		log("trace", resultLine)
 		return resultLine;
 	}
 
-	//TODO: This is redundant with taskFromLine. And the status is sus.
-	// But I don't want to make too many changes right now
+
+	private addNote(resultLine: string, content: string) {
+		resultLine = `${resultLine}\n  >[!TTS-NOTE]+`;
+		const noteLines = content.split('\n');
+		noteLines.forEach(item => {
+			resultLine = `${resultLine}\n  >${item}`;
+		})
+		resultLine = `${resultLine}\n` //gotta have a blank line after the callout otherwise badshit(tm) happens.
+
+		return resultLine;
+	}
+
+	//Returns the Item with task ID and all. taskFromLine returns the description WITHOUT the ID.
 	private getItemFromLine(itemLine: string) {
 
 		const matches = REGEX.ITEM_LINE.exec(itemLine);
@@ -765,5 +799,20 @@ export class TaskParser {
 		} catch (e) {
 			console.error("Hashing error.", e);
 		}
+	}
+
+	getNoteLines(task: ITask) {
+		let numLinesInNote = 0;
+		if (task.content.length > 0) {
+			numLinesInNote = (task.content.match(/\n/g) || []).length
+			if (numLinesInNote == 0) {
+				//it's a one line add one.
+				numLinesInNote += 1;
+			}
+		}
+		return numLinesInNote;
+	}
+	hasNote(task: ITask) {
+		return (task.content && task.content.length > 0);
 	}
 }

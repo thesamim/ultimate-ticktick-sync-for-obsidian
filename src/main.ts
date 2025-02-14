@@ -1,7 +1,7 @@
 import "@/static/index.css";
 import "@/static/styles.css";
 
-import {MarkdownView, Plugin, Notice, TFolder} from 'obsidian';
+import { MarkdownView, Plugin, Notice, TFolder } from 'obsidian';
 import type {Editor, MarkdownFileInfo} from 'obsidian';
 
 //settings
@@ -9,11 +9,14 @@ import {
 	DEFAULT_SETTINGS,
 	getProjects,
 	getSettings,
-	getTasks, updateProjectGroups,
+	getTasks,
+	updateProjectGroups,
 	updateProjects,
 	updateSettings,
 	updateTasks
 } from './settings';
+
+import {TickTickService} from '@/services';
 //TickTick api
 import {TickTickRestAPI} from '@/services/TicktickRestAPI';
 //task parser
@@ -28,11 +31,11 @@ import {SetDefaultProjectForFileModal} from './modals/DefaultProjectModal';
 import {LatestChangesModal} from "./modals/LatestChangesModal"
 import {isOlder} from "./utils/version";
 import {TickTickSyncSettingTab} from "./ui/settings";
-import {TickTickService} from "@/services";
 import {QueryInjector} from "@/query/injector";
 import {log, logging, type LogOptions} from "@/utils/logging";
 import store from "@/store";
 import {DateMan} from "@/dateMan";
+import type { iFileMap } from '@/services/fileMap';
 
 
 export default class TickTickSync extends Plugin {
@@ -94,12 +97,49 @@ export default class TickTickSync extends Plugin {
 		});
 
 		//Used for testing adhoc code.
-		// const ribbonIconEl1 = this.addRibbonIcon('check', 'TickTickSync', async (evt: MouseEvent) => {
-			// // Nothing to see here right now.
-			// // updateTasks([])
-			// let foo =  {tasks: getTasks(), projects: getProjects()}
-			// log("debug", "What", foo)
-		// });
+		const ribbonIconEl1 = this.addRibbonIcon('check', 'TickTickSync', async (evt: MouseEvent) => {
+			// Nothing to see here right now.
+			// const { target } = evt;
+			const markDownView = this.app.workspace.getActiveViewOfType(MarkdownView);
+			const file = markDownView?.app.workspace.activeEditor?.file;
+			if (file) {
+				console.time("Parse file")
+				const taskData = await this.service.buildFileMap(file);
+				console.timeEnd("Parse file")
+				console.log("Last Line", this.service.getLastLine());
+				console.log("Insertion Line", this.service.getInsertionLine());
+
+				console.log("taskData", taskData);
+				// console.log("Insertion point is: ", this.service.get);
+				let outFile = this.app.vault.getAbstractFileByPath("taskdata.json")
+				if (!outFile) {
+					await this.app.vault.create("/taskdata.json", "")
+				}
+				// 	console.log("outFile", outFile);
+				//
+				// 	// let output = ""
+				// 	// taskData.forEach(task => {
+				// 	// 	output = output + `${task.line[0]} -- ${task.parent}\n`;
+				// 	// })
+				//
+				await this.app.vault.modify(outFile, JSON.stringify(taskData.fileMapRecords, null, 4));
+				// 	// await this.app.vault.modify(outFile, output);
+				//
+				// console.time("Parse files")
+				// const filesToSync = getSettings().fileMetadata;
+				// for (const fileKey in filesToSync) {
+				// 	const file = this.app.vault.getAbstractFileByPath(fileKey);
+				// 	console.log("found file", file?.name);
+				// 	const taskData = await this.fileOperation?.buildTaskData(file);
+				// 	console.log("found: ", taskData.length)
+
+				// listItems?.forEach(item => {
+				// 	console.log(`item id: ${item.id}, task: ${item.task}, Position: ${item.position.start}, ${item.position.end}`);
+				// })
+				// }
+				// console.timeEnd("Parse files")
+			}
+		});
 
 
 		this.registerEvents();
@@ -222,7 +262,7 @@ export default class TickTickSync extends Plugin {
 				if (!getSettings().token) {
 					return;
 				}
-
+				console.log("editor change");
 				//TODO: lineNumberCheck also triggers a line modified check. I suspect this is redundant and
 				//      inefficient when a new task is being added. I've added returns out of there, but I need for find if the last line check
 				//      is needed for an add.
@@ -268,6 +308,7 @@ export default class TickTickSync extends Plugin {
 		//Listen for file modified events and execute fullTextNewTaskCheck
 		this.registerEvent(this.app.vault.on('modify', async (file) => {
 			try {
+				console.log("modified.");
 				if (!getSettings().token) {
 					return;
 				}
@@ -516,7 +557,7 @@ export default class TickTickSync extends Plugin {
 	// 	const taskElement = target.closest('div');
 	// 	if (taskElement) {
 	// 		const taskLine = taskElement.textContent;
-	// 		const taskId = this.taskParser?.getTickTickIdFromLineText(taskLine);
+	// 		const taskId = this.taskParser?.getTickTickId(taskLine);
 	// 		if (taskId) {
 	// 			// let task = this.taskParser?.convertTextToTickTickTaskObject(tas)
 	// 			if (bOpenTask) {

@@ -6,9 +6,12 @@ import {SyncMan} from "@/services/syncModule";
 import {Editor, type MarkdownFileInfo, type MarkdownView, Notice, TFile} from "obsidian";
 import {CacheOperation} from "@/services/cacheOperation";
 import {FileOperation} from "@/fileOperation";
+import { FileMap, type iFileMap } from '@/services/fileMap';
 import {log} from "@/utils/logging";
 
+
 const LOCK_TASKS = 'LOCK_TASKS';
+
 
 //TODO: encapsulate all api and cache
 export class TickTickService {
@@ -19,6 +22,7 @@ export class TickTickService {
 	api?: Tick;
 	cacheOperation!: CacheOperation;
 	fileOperation?: FileOperation;
+	fileMap!: FileMap;
 
 	constructor(plugin: TickTickSync) {
 		this.plugin = plugin;
@@ -45,6 +49,7 @@ export class TickTickService {
 			this.cacheOperation = new CacheOperation(this.plugin.app, this.plugin);
 			//initialize file operation
 			this.fileOperation = new FileOperation(this.plugin.app, this.plugin);
+			this.fileMap  = new FileMap(this.plugin.app, this.plugin);
 			this.tickTickSync = new SyncMan(this.plugin.app, this.plugin);
 			this.initialized = true;
 			return true;
@@ -172,6 +177,24 @@ export class TickTickService {
 		return await doWithLock(LOCK_TASKS, async () => {
 			return this.tickTickSync?.lineModifiedTaskCheck(filepath, lastLineText, lastLine, fileContent);
 		});
+	}
+
+	//file Map opps
+
+	async buildFileMap(filePath: TFile): Promise<iFileMap | null | undefined> {
+		return this.fileMap?.buildFileMap(filePath);
+	}
+
+	getLastLine(): number {
+		return this.fileMap?.getLastLine();
+	}
+
+	getInsertionLine(): number {
+		return this.fileMap?.getInsertionLine();
+	}
+
+	getEndLineForTask(ID: string) {
+		return this.fileMap?.getEndLineForTask(ID);
 	}
 
 	/*

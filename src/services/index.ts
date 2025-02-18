@@ -179,6 +179,7 @@ export class TickTickService {
 		});
 	}
 
+	//TODO: I'm not convinced this is right.
 	//file Map opps
 
 	async buildFileMap(filePath: TFile): Promise<iFileMap | null | undefined> {
@@ -194,7 +195,7 @@ export class TickTickService {
 	}
 
 	getEndLineForTask(ID: string) {
-		return this.fileMap?.getEndLineForTask(ID);
+		return this.fileMap?.getTaskEndLine(ID);
 	}
 
 	/*

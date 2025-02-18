@@ -194,7 +194,7 @@ export class TaskParser {
 			resultLine = this.addItems(resultLine, task.items, numTabs);
 		} else {
 			if (nNoteLines > 0) {
-				resultLine = this.addNote(resultLine, task.content);
+				resultLine = this.addNote(resultLine, task.content, numTabs);
 			}
 		}
 		console.log("resultLine:", resultLine);
@@ -432,7 +432,8 @@ export class TaskParser {
 		return (result);
 	}
 	getLineItemId(text: string) {
-		// console.log("Text:[", text, "]\n", REGEX.LINE_ITEM_ID.test(text));
+		if (!text)
+		{console.error("Text:[", text, "]\n", REGEX.LINE_ITEM_ID.test(text));}
 		let res = text.match(REGEX.LINE_ITEM_ID)
 		let lineItemId;
 		if (res) {
@@ -728,11 +729,12 @@ export class TaskParser {
 	}
 
 
-	private addNote(resultLine: string, content: string) {
-		resultLine = `${resultLine}\n  >[!TTS-NOTE]+`;
+	private addNote(resultLine: string, content: string, numbTabs: number) {
+		const prefix = '\n' + '\t'.repeat(numbTabs) + '  >'
+		resultLine = `${resultLine}${prefix}[!TTS-NOTE]+`;
 		const noteLines = content.split('\n');
 		noteLines.forEach(item => {
-			resultLine = `${resultLine}\n  >${item}`;
+			resultLine = `${resultLine}${prefix}${item}`;
 		})
 		resultLine = `${resultLine}\n` //gotta have a blank line after the callout otherwise badshit(tm) happens.
 

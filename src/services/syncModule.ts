@@ -15,6 +15,7 @@ import type { TaskDetail } from '@/services/cacheOperation';
 import { TaskDeletionModal } from '@/modals/TaskDeletionModal';
 import { getSettings, updateProjectGroups } from '@/settings';
 import {TickTickService} from '@/services';
+import type { iFileMapRecord } from '@/services/fileMap';
 
 type deletedTask = {
   taskId: string,
@@ -634,7 +635,7 @@ export class SyncMan {
                 break;
               }
             } else {
-              console.log(`parent didn't have items.`);
+              // console.log(`parent didn't have items.`);
               break;
             }
 
@@ -692,15 +693,15 @@ export class SyncMan {
         }
       }
       //let's check if we have any notes to update.
-      const fileMap = await this.plugin.service.buildFileMap(file);
-      fileMap?.fileMapRecords?.forEach(async element => {
-        if (element.type == 'Task') {
-          if (element?.taskLines?.length > 1) {
-            //we have a task, it has notes.
-            hasModifiedTask = await this.noteModifiedCheck(element.taskLines, element.ID, filepath as string);
-          }
-        }
-      });
+      const fileMapRecords = await this.plugin.service.buildFileMap(file);
+		for (const element of fileMapRecords) {
+			if (element.type == 'Task') {
+				if (element?.taskLines?.length > 1) {
+					//we have a task, it has notes.
+					hasModifiedTask = await this.noteModifiedCheck(element.taskLines, element.ID, filepath as string);
+				}
+			}
+		}
 
 
       //TODO: at some point, I had a notion to simplify the change handling, this is an after effect.
@@ -1249,8 +1250,7 @@ export class SyncMan {
       return;
     }
     const file = this.app.vault.getAbstractFileByPath(filepath);
-    const fileMap = await this.plugin.service.buildFileMap(file);
-	const taskData = fileMap?.fileMapRecords
+	const taskData = await this.plugin.service.buildFileMap(file);
     const currentObject = this.findTaskOrItemByLineNumber(taskData, lineNumber);
 
     if (!currentObject) {
@@ -1313,7 +1313,7 @@ export class SyncMan {
 
     } else {
       if (getSettings().debugMode) {
-        console.log(`parent didn't have items.`);
+        // console.log(`parent didn't have items.`);
       }
     }
 
@@ -1330,13 +1330,13 @@ export class SyncMan {
   private async noteModifiedCheck(currentNoteLines: string[], taskID: number, filepath: string) {
     //TODO: deal with note format cruft
     currentNoteLines.splice(0, 2) //get rid of the task and the callout header
-    console.log("Before: " + currentNoteLines);
+    // console.log("Before: " + currentNoteLines);
     for (let i = 0; i < currentNoteLines.length; i++) {
       currentNoteLines[i] = currentNoteLines[i].replace("  >", "")
     }
 
 
-    console.log("After: " + currentNoteLines);
+    // console.log("After: " + currentNoteLines);
 
     let bModified = false;
     const parentTask = this.plugin.cacheOperation?.loadTaskFromCacheID(taskID);
@@ -1357,6 +1357,7 @@ export class SyncMan {
         bModified = await this.updateTask(parentTask, filepath);
       }
     }
+	return bModified
   }
 
   private async updateTask(parentTask: ITask, filepath: string) {

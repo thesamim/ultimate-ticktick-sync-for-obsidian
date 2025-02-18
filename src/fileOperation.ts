@@ -3,7 +3,6 @@ import TickTickSync from '@/main';
 import type { ITask } from './api/types/Task';
 import { TaskDeletionModal } from './modals/TaskDeletionModal';
 import { getSettings } from '@/settings';
-import { log } from '@/utils/logging';
 import { FileMap } from '@/services/fileMap';
 
 export class FileOperation {
@@ -287,65 +286,10 @@ export class FileOperation {
 				throw new Error(`File not found for ${newTask.id}, ${newTask.title}`);
 			}
 		}
-		// Get the file object and update the content
-		const file = this.app.vault.getAbstractFileByPath(filepath);
-		const content = await this.app.vault.read(file);
 
-		const lines = content.split('\n');
-		let modified = false;
+		const tFilepath = this.app.vault.getAbstractFileByPath(filepath) as TFile;
 
-
-		for (let i = 0; i < lines.length; i++) {
-			let line = lines[i];
-			if (line.includes(taskId) && this.plugin.taskParser?.hasTickTickTag(line)) {
-
-				//Clean up the old content
-				if (oldTask && oldTask.items && oldTask.items.length > 0) {
-					lines.splice(i + 1, oldTask.items.length);
-				}
-				let numLinesInNote = 0;
-				if (oldTask.content.length > 0) {
-					numLinesInNote = (oldTask.content.match(/\n/g) || []).length;
-					if (numLinesInNote == 0) {
-						//it's a one line add one.
-						numLinesInNote += 1;
-					}
-				}
-				if (numLinesInNote > 0) {
-					//todo: This accounts for the header in the callout, and the last line. If they don't choose callout
-					//      adjust accordingly.
-					numLinesInNote += 2;
-					lines.splice(i + 1, numLinesInNote);
-				}
-				let parentTabsNumber = this.plugin.taskParser?.getTabIndentation(line);
-				let newTaskContent = await this.plugin.taskParser?.convertTaskToLine(newTask, parentTabsNumber, 'TTUpdate');
-
-
-				let itemCount = 0;
-				lines[i] = newTaskContent;
-				itemCount = (newTaskContent.match(/\n/g) || []).length;
-				console.log('New count: ', itemCount);
-
-				//Trust either Task plugin or Ticktick to do the completion dates.
-				// //always add completion date at end if the task is closed.
-				// if (task.status != 0) {
-				// 	//in an ideal world, we would triger Tasks to complete the task for us.
-				// 	//but we're not there. Slap a completion date on the end of the line and be done
-				// 	lines[i] = this.plugin.taskParser?.addCompletionDate(lines[i], task.completedTime);
-				// }
-
-				// if (task.items && task.items.length > 0 ) {
-				//     console.log(`new Task has ${currentTask.items.length}`)
-				// }
-				modified = true;
-				break;
-			}
-		}
-		if (modified) {
-			const newContent = lines.join('\n');
-			await this.app.vault.modify(file, newContent);
-			// console.error("Modified: ", file?.path, new Date().toISOString());
-		}
+		await this.addProjectTasksToFile(tFilepath, [newTask], true);
 
 	}
 
@@ -528,7 +472,7 @@ export class FileOperation {
 	// }
 
 // delete task from file
-	async deleteTaskFromSpecificFile(filePath: string, task: ITask, bConfirmDialog: boolean) {
+	async deleteTaskFromSpecificFile(filePath: TFile, task: ITask, bConfirmDialog: boolean) {
 		// Get the file object and update the content
 		if (bConfirmDialog) {
 			const bConfirm = await this.confirmDeletion(task.title + 'in File: ' + filePath);
@@ -538,8 +482,8 @@ export class FileOperation {
 			}
 		}
 		console.info('Task being deleted from file: ', task.id, filePath);
-		const file = this.app.vault.getAbstractFileByPath(filePath);
-		const content = await this.app.vault.read(file);
+
+		const content = await this.app.vault.read(filePath);
 
 		const lines = content.split('\n');
 		let modified = false;
@@ -562,8 +506,8 @@ export class FileOperation {
 
 		if (modified) {
 			const newContent = lines.join('\n');
-			//console.log(newContent)
-			await this.app.vault.modify(file, newContent);
+			console.log(newContent, filePath);
+			await this.app.vault.modify(filePath, newContent);
 			// console.error("Modified: ", file?.path, new Date().toISOString());
 		}
 
@@ -578,7 +522,7 @@ export class FileOperation {
 		const filepath = await this.plugin.cacheOperation?.getFilepathForTask(taskId);
 		if (filepath) {
 			const numItems = currentTask?.items?.length ? currentTask?.items?.length : 0 + (currentTask?.content.match(/\n/g) || []).length;
-			await this.deleteTaskFromSpecificFile(filepath, task , false);
+			await this.deleteTaskFromSpecificFile(filepath, task, false);
 		} else {
 			throw new Error(`File not found for ${task.title}. File path found is ${filepath}`);
 		}
@@ -651,12 +595,13 @@ export class FileOperation {
 		}
 	}
 
-	private async addProjectTasksToFile(file: TFile, tasks: ITask[]): Promise<boolean> {
+	private async addProjectTasksToFile(file: TFile, tasks: ITask[], bUpdating = false): Promise<boolean> {
 		try {
-			const newData = await this.writeLines(tasks, file);
+			const newData = await this.writeLines(tasks, file, bUpdating);
 			await this.app.vault.process(file, (data) => {
 				data = newData;
-				return data});
+				return data;
+			});
 			return true;
 		} catch (error) {
 			console.error(`Could not add Tasks to file ${file.path} \n Error: ${error}`);
@@ -666,61 +611,81 @@ export class FileOperation {
 
 	//TODO: I think there are three versions of this!
 
-	private async writeLines(tasks: ITask[], file: TFile) {
+	private async writeLines(tasks: ITask[], file: TFile, bUpdating = false): Promise<string> {
 		// Go through the tasks.
 		// For every task
 		// 	if it has a parent, add it after the parent.
 		//  else add at the the insertion point in lines.
 		const fileMap = new FileMap(this.app, this.plugin);
 		const fileMapRecords = await fileMap.buildFileMap(file);
-		let data = await this.app.vault.read(file);
-		console.log("================");
-		console.log("Tasks: ", tasks);
-		console.log("filemap: ", fileMap);
-		console.log("fileMapRecords: ", fileMapRecords);
-		console.log("Data: ", data);
-		console.log("================");
+		const lines = fileMap.fileLines;
+
+
+		console.log('================');
+		console.log('Tasks: ', tasks);
+		console.log('fileMapRecords: ', fileMapRecords);
+		console.log('Data: ', lines);
+		console.log('================');
 
 		const addedTasks: string[] = [];
-		const lines = data.split('\n');
-		for (const task of tasks) {
-			let lineToInsert: number = fileMap.getInsertionLine() + 1;
-			//Tired of seeing duplicates because of Sync conflicts.
-			if (lines.find(line => (line.includes(task.id)))) {
-				//it's in the file, but not in cache. Just update it.
-				await this.updateTaskInFile(task, lines);
-				await this.plugin.cacheOperation?.updateTaskToCache(task, file.path);
-				addedTasks.push(task.id);
-				continue;
-			}
 
+		for (const task of tasks) {
+			let lineToInsert = 0;
+			if (bUpdating) {
+				lineToInsert = fileMap.getTaskLine(task.id);
+			} else {
+				lineToInsert = fileMap.getInsertionLine() + 1;
+			}
+			//Tired of seeing duplicates because of Sync conflicts.
+			if (!bUpdating) {
+				if (lines.find(line => (line.includes(task.id)))) {
+					//it's in the file, but not in cache. Just update it.
+					await this.updateTaskInFile(task, lines);
+					await this.plugin.cacheOperation?.updateTaskToCache(task, file.path);
+					addedTasks.push(task.id);
+					continue;
+				}
+			}
 
 
 			let parentTabs = '';
 			if (task.parentId) {
-				let parentLineNumber = fileMap.getParentLineNumber(task.parentId);
-				if (parentLineNumber < 0) {
-					log('warn', 'Parent Task not Found', task.title);
+				if (!bUpdating) {
+					lineToInsert = fileMap.getParentEndLine(task.parentId) + 1;
+					if (lineToInsert < 0) {
+						const justAddedParentId = addedTasks.find((taskId) => taskId == task.parentId);
+						console.log('Parent Task not Found for: ', task.title, 'but maybe it was just added: ', justAddedParentId);
+					}
 				}
 
 				parentTabs = fileMap.getParentTabs(task.parentId);
+
 				if (parentTabs) {
 					parentTabs = parentTabs + '\t';
 				} else {
 					parentTabs = '\t';
 				}
-				lineToInsert = fileMap.getParentInsertPoint(task.parentId) + 1;
 			}
 			let lineText = await this.plugin.taskParser?.convertTaskToLine(task, parentTabs.length, 'TTAdd');
-			const bHasNotes = this.plugin.taskParser?.hasNote(task);
 			lineText = parentTabs + lineText;
-			if (!bHasNotes && lineText.includes('\n')) { // are there items? (but not notes!)
-				lineText = lineText.replace(/\n/g, '\n' + parentTabs+ '\t');
-			} else {
-				lineText = lineText.replace(/\n/g, '\n' + '\t');
-			}
+
 			const linesBefore = lines.length;
-			lines.splice(lineToInsert, 0, lineText);
+			let linesToDelete = 0;
+			if (bUpdating) {
+				let taskEndLine = fileMap.getTaskEndLine(task.id);
+				linesToDelete = (taskEndLine - lineToInsert);
+				if (linesToDelete <= 0 ) {
+					console.log("WTF?", task.id, task.title, lineToInsert, taskEndLine);
+					linesToDelete = 1;
+				}
+				console.log(`on update Insert Line: ${lineToInsert}, End Line: ${taskEndLine}, linesToDelete: ${linesToDelete}`);
+			} else {
+				console.log(`on add Insert Line: ${lineToInsert}, linesToDelete: ${linesToDelete}`);
+			}
+
+
+			// console.log("Editing Foo:\n", `${(bUpdating)?"updating": "adding"}`, " Line: ", lineToInsert, "deleting: ", linesToDelete, "tabs", parentTabs.length, "\nLineText: [", lineText + "]");
+			lines.splice(lineToInsert, linesToDelete, lineText);
 			const linesAdded = lines.length - linesBefore;
 
 			//We just add the ticktick tag, update it on ticktick now.
@@ -738,10 +703,12 @@ export class FileOperation {
 			//keep track of added Tasks because item count is affected
 			addedTasks.push(task.id);
 
-			//a Task can have notes, or Items, not both. If it has notes, it's one array. If it has items it's not.
-			//we update the filemaprecords in case we get a whole tree of tasks and items and notes and need to do lookups.
-			const bHasItems = task.items && task.items.length > 0
-			if (bHasNotes || !bHasItems) {
+
+			if (!bUpdating) {
+				//a Task can have notes, or Items, not both. If it has notes, it's one array. If it has items it's not.
+				//we update the filemaprecords in case we get a whole tree of tasks and items and notes and need to do lookups.
+				const bHasItems = task.items && task.items.length > 0;
+
 				fileMap.addFileRecord({
 						ID: task.id,
 						type: 'Task',
@@ -749,12 +716,12 @@ export class FileOperation {
 						startLine: lineToInsert,
 						endLine: lineToInsert + linesAdded,
 						parent: task.parentId ? Number(task.parentId) : -1,
-					//TODO: Get rid of whatitfound and figure out what to do about heading.
+						//TODO: Get rid of whatitfound and figure out what to do about heading.
 						heading: '',
 						whatitfound: ''
 					}
 				);
-			} else {
+
 				if (bHasItems) {
 					let startLine = lineToInsert;
 					for (const taskItem of task.items) {
@@ -772,14 +739,13 @@ export class FileOperation {
 						startLine = startLine + 1;
 					}
 				}
+				// console.log('FileMap now: ', fileMap);
 			}
-			console.log("FileMap now: ", fileMap);
-
 		}
-		data = lines.join('\n');
-		this.plugin.lastLines.set(file.path, data.length);
-		console.log("DAta" , data);
-		return data;
+		const resultLines = lines.join('\n');
+		this.plugin.lastLines.set(file.path, lines.length);
+		// console.log('DAta', resultLines);
+		return resultLines;
 	}
 
 	//Yes, I know this belongs in taskParser, but I don't feel like messing with it right now.
@@ -894,7 +860,8 @@ export class FileOperation {
 	}
 
 	private async moveTask(filepath: string, task: ITask, oldtaskItemNum: number, oldTaskId: string, oldProjectId: string) {
-		await this.deleteTaskFromSpecificFile(filepath, task , false);
+		const tFilePath = this.app.vault.getAbstractFileByPath(filepath);
+		await this.deleteTaskFromSpecificFile(tFilePath, task, false);
 		await this.plugin.cacheOperation?.deleteTaskFromCache(oldTaskId);
 
 		await this.addTasksToFile([task]);

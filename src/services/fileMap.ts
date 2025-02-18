@@ -9,37 +9,40 @@ export interface iFileMapRecord {
 	taskLines: string[]; //Will contain Task AND Note Lines.
 	startLine: number;
 	endLine: number;
-	parent: number;
+	parent: string;
 	heading: any;
-}
-
-export interface iFileMap {
-	fileMapRecords: iFileMapRecord[];
 }
 
 export class FileMap {
 	app: App;
 	plugin: TickTickSync;
-	fileMap: iFileMap | undefined;
+	fileMapRecords: iFileMapRecord[] | undefined;
 	lineCount: number;
 	headings: { heading: string; startLine: number; endLine: number; }[] | undefined;
+	fileLines: string[] | undefined;
 
 	constructor(app: App, plugin: TickTickSync) {
 		this.app = app;
 		this.plugin = plugin;
+		this.lineCount = 0;
 	}
 
 	async buildFileMap(file: TFile): Promise<iFileMap | null> {
+		//TODO: This is getting called extraneously. find out why.
+		// console.warn('BuildFileMap');
 		const data = this.app.metadataCache.getFileCache(file);
 		if (!data) {
 			return null;
 		}
-		const fileCachedContent: string = await this.app.vault.cachedRead(file);
-		const lines = fileCachedContent.split('\n');
-		this.lineCount = lines.length;
 
-		this.fileMap = [] as unknown as iFileMap;
-		this.fileMap.fileMapRecords = [];
+		//TODO: look into how dangerous it is to use the cache here...
+		const fileCachedContent: string = await this.app.vault.read(file);
+		this.fileLines = fileCachedContent.split('\n');
+		this.lineCount = this.fileLines.length;
+
+		const lines  = this.fileLines;
+
+		this.fileMapRecords = [];
 
 		// Map headings by their start and end line ranges
 		if (data?.headings) {
@@ -57,11 +60,9 @@ export class FileMap {
 		// Process listItems
 		if ('listItems' in data) {
 			// @ts-ignore
-			console.log("List Items: ", data.listItems);
 			data.listItems.forEach((item, index) => {
 				if (item.task !== undefined) {
 					let startLine = item.position.start.line;
-					// console.log("--Text:", lines[startLine]);
 					//only care about TTS tasks.
 					const tickTickID = this.plugin.taskParser?.getTickTickId(lines[startLine]);
 					const tickTickItemID = this.plugin.taskParser?.getLineItemId(lines[startLine]);
@@ -97,16 +98,14 @@ export class FileMap {
 							parent: parentID,
 							heading: heading
 						};
-						this.fileMap.fileMapRecords.push(fileMapRecord);
+						this.fileMapRecords.push(fileMapRecord);
 					}
 				}
 			});
 		}
 
-		return this.fileMap;
+		return this.fileMapRecords;
 	}
-
-	// Helper function to find the heading for a given line
 
 	getLastLine(): number {
 		return this.lineCount + 1;
@@ -114,16 +113,15 @@ export class FileMap {
 
 	getInsertionLine(): number {
 		const lastTask = this.findLastTask();
-		console.log("Last Task: ", lastTask);
 		if (lastTask && lastTask.ID) {
-			return this.getEndLineForTask(lastTask.ID);
+			return this.getTaskEndLine(lastTask.ID);
 		}
 		return this.getLastLine();
 	}
 
 	private findLastTask(): iFileMapRecord | undefined {
 		// Filter only tasks (type === "Task")
-		const tasks = this.fileMap.fileMapRecords.filter(record => record.type === "Task");
+		const tasks = this.fileMapRecords?.filter(record => record.type === "Task");
 
 		if (tasks.length === 0) {
 			// If no tasks are found, return undefined
@@ -138,7 +136,11 @@ export class FileMap {
 		return lastTask;
 	}
 
-	getEndLineForTask(ID: string): number {
+	getTaskLine(id: string) {
+		return this.getTaskRecord(id)?.startLine;
+	}
+
+	getTaskEndLine(ID: string): number {
 		// Find the task with the given ID
 		const task = this.getTaskRecord(ID);
 
@@ -147,11 +149,12 @@ export class FileMap {
 		}
 
 		// Find all children of the task
-		const children = this.fileMap.fileMapRecords.filter(record => record.parent === task.ID);
+		const children = this.fileMapRecords?.filter(record => ((record.type=="Item") && (record.parent === task.ID)));
+		// const children = this.fileMapRecords?.filter(record => ((record.parent === task.ID)));
 
 		if (children.length === 0) {
 			// If no children, return the task's endLine
-			return task.endLine + 1;
+			return task.endLine;
 		}
 
 		// Find the child with the highest endLine
@@ -162,7 +165,7 @@ export class FileMap {
 		return childWithHighestEndLine.endLine + 1;
 	}
 
-
+	// Helper function to find the heading for a given line
 	private findHeadingForLine(headings: any[], line: number) {
 		for (let i = headings.length - 1; i >= 0; i--) {
 			const heading = headings[i];
@@ -182,7 +185,7 @@ export class FileMap {
 	private resolveParent(parentLineNumber : number) {
 		// console.log(`parent: ${inTask.parent}, tasks: ${tasks.length}`);
 		let parentId = "-1";
-		let fileMapRecords = this.fileMap.fileMapRecords;
+		let fileMapRecords = this.fileMapRecords;
 		for (let i = 0; i < fileMapRecords.length; i++) {
 			// console.log(`${inTask.parent} -- ${tasks[i].position.start.line} - ${tasks[i].position.end.line}`);
 			if (parentLineNumber == fileMapRecords[i].startLine) {
@@ -203,7 +206,7 @@ export class FileMap {
 		}
 	}
 
-	getParentInsertPoint(parentId: string) {
+	getParentEndLine(parentId: string) {
 		const parent = this.getTaskRecord(parentId);
 		if (parent) {
 			let lineNum = parent.endLine; //account for task and notes.
@@ -218,16 +221,17 @@ export class FileMap {
 	}
 
 	private getTaskRecord(parentId: string) {
-		return this.fileMap?.fileMapRecords.find(taskRecord => taskRecord.ID === parentId);
+		return this.fileMapRecords?.find(taskRecord => taskRecord.ID === parentId);
 	}
 
 	addFileRecord(inRecord: iFileMapRecord) {
-		this.fileMap?.fileMapRecords.push(inRecord);
+		this.fileMapRecords?.push(inRecord);
+		this.lineCount += inRecord.endLine - inRecord.startLine + 1;
 	}
 
 	private getLastEndLineForParent(parentId: number): number | undefined {
 		// Filter records that have the given parentId
-		const children = this.fileMap?.fileMapRecords.filter(record => record.parent === parentId);
+		const children = this.fileMapRecords?.filter(record => record.parent === parentId);
 
 		if (!children || children.length === 0) {
 			return undefined; // No children found for the given parentId
@@ -238,7 +242,20 @@ export class FileMap {
 			return (prev.endLine > current.endLine) ? prev : current;
 		});
 
-		return lastEndLineRecord.endLine;
+		let currentEndLine = lastEndLineRecord.endLine;
+
+		let lastDescendantLine = 0;
+		children.forEach(child => {
+			const descendantLine = this.getLastEndLineForParent(child.ID)
+			if (descendantLine && (descendantLine > lastDescendantLine)) {
+				lastDescendantLine = descendantLine;
+			}
+		})
+		if ((lastDescendantLine) && (lastDescendantLine > currentEndLine)) {
+			currentEndLine = lastDescendantLine;
+		}
+
+		return currentEndLine;
 	}
 
 	getParentTabs(parentId: string) {
@@ -247,4 +264,6 @@ export class FileMap {
 		const numTabs = taskRecord?.taskLines[0].match(regex)[0];
 		return numTabs;
 	}
+
+
 }
